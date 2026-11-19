@@ -181,6 +181,53 @@ class _SimpleAuxFX:
         return out
 
 
+def _fill_bank_branch(branch_sos: np.ndarray, freq: float, q: float, fs: float) -> None:
+    """Populate a pre-allocated (3, 6) SOS array [BandPass, LowPass, HighPass] in place."""
+    fs_f = float(fs)
+    upper = min(20000.0, 0.48 * fs_f)
+    two_pi_inv_fs = (2.0 * math.pi) / fs_f
+
+    f_bp = max(20.0, min(upper, float(freq)))
+    q_bp = max(0.1, min(30.0, float(q)))
+    w0 = f_bp * two_pi_inv_fs
+    c = math.cos(w0)
+    alpha = math.sin(w0) / (2.0 * q_bp)
+    inv_a0 = 1.0 / (1.0 + alpha)
+    branch_sos[0, 0] = alpha * inv_a0
+    branch_sos[0, 1] = 0.0
+    branch_sos[0, 2] = -alpha * inv_a0
+    branch_sos[0, 3] = 1.0
+    branch_sos[0, 4] = (-2.0 * c) * inv_a0
+    branch_sos[0, 5] = (1.0 - alpha) * inv_a0
+
+    inv_sqrt2_x2 = 1.0 / (2.0 * 0.7071067811865476)
+    f_lp = max(20.0, min(upper, f_bp * 2.5))
+    w0_l = f_lp * two_pi_inv_fs
+    c_l = math.cos(w0_l)
+    a_l = math.sin(w0_l) * inv_sqrt2_x2
+    inv_a0_l = 1.0 / (1.0 + a_l)
+    b0_l = ((1.0 - c_l) * 0.5) * inv_a0_l
+    branch_sos[1, 0] = b0_l
+    branch_sos[1, 1] = 2.0 * b0_l
+    branch_sos[1, 2] = b0_l
+    branch_sos[1, 3] = 1.0
+    branch_sos[1, 4] = (-2.0 * c_l) * inv_a0_l
+    branch_sos[1, 5] = (1.0 - a_l) * inv_a0_l
+
+    f_hp = max(20.0, min(upper, f_bp * 0.4))
+    w0_h = f_hp * two_pi_inv_fs
+    c_h = math.cos(w0_h)
+    a_h = math.sin(w0_h) * inv_sqrt2_x2
+    inv_a0_h = 1.0 / (1.0 + a_h)
+    b0_h = ((1.0 + c_h) * 0.5) * inv_a0_h
+    branch_sos[2, 0] = b0_h
+    branch_sos[2, 1] = -2.0 * b0_h
+    branch_sos[2, 2] = b0_h
+    branch_sos[2, 3] = 1.0
+    branch_sos[2, 4] = (-2.0 * c_h) * inv_a0_h
+    branch_sos[2, 5] = (1.0 - a_h) * inv_a0_h
+
+
 class FilterDSPProcessor:
     """Thread-safe real-time DSP filter & mixer processor."""
 
@@ -195,28 +242,27 @@ class FilterDSPProcessor:
         self.parametric_cfg = ParametricEQConfig()
         self.channel_cfg = ChannelStripConfig()
 
-        # Cached SOS & persistent filter states per channel (0=L, 1=R)
+        # Cached SOS & stereo persistent states of shape (n_sections, 2, 2)
         self._single_sos: np.ndarray = IDENTITY_SOS.copy()
-        self._single_zi: list[np.ndarray] = [np.zeros((1, 2)), np.zeros((1, 2))]
+        self._single_zi: np.ndarray = np.zeros((1, 2, 2), dtype=np.float64)
 
         self._net_sos: list[np.ndarray] = []
-        self._net_zi: list[list[np.ndarray]] = [[], []]
-        # Extra LP/HP sections per bank stage
-        self._bank_lp_sos: list[np.ndarray] = []
-        self._bank_hp_sos: list[np.ndarray] = []
-        self._bank_lp_zi: list[list[np.ndarray]] = [[], []]
-        self._bank_hp_zi: list[list[np.ndarray]] = [[], []]
+        self._net_series_sos: np.ndarray = IDENTITY_SOS.copy()
+        self._net_series_zi: np.ndarray = np.zeros((1, 2, 2), dtype=np.float64)
+        self._net_par_zi: list[np.ndarray] = []
+        self._bank_branch_sos: list[np.ndarray] = [np.zeros((3, 6), dtype=np.float64) for _ in range(4)]
+        self._bank_branch_zi: list[np.ndarray] = [np.zeros((3, 2, 2), dtype=np.float64) for _ in range(4)]
         self._lfo_phases: np.ndarray = np.zeros(4, dtype=np.float64)
 
         self._geq_sos: list[np.ndarray] = []
         self._geq_stacked_sos: np.ndarray = IDENTITY_SOS.copy()
         self._geq_is_identity: bool = True
-        self._geq_zi: list[np.ndarray] = [np.zeros((1, 2)), np.zeros((1, 2))]
+        self._geq_zi: np.ndarray = np.zeros((1, 2, 2), dtype=np.float64)
 
         self._peq_sos: list[np.ndarray] = []
         self._peq_stacked_sos: np.ndarray = IDENTITY_SOS.copy()
         self._peq_is_identity: bool = True
-        self._peq_zi: list[np.ndarray] = [np.zeros((1, 2)), np.zeros((1, 2))]
+        self._peq_zi: np.ndarray = np.zeros((1, 2, 2), dtype=np.float64)
 
         self._aux_fx = _SimpleAuxFX(self.sample_rate)
         self.rebuild_all()
@@ -229,22 +275,15 @@ class FilterDSPProcessor:
 
     def reset_states(self) -> None:
         with self._lock:
-            self._single_zi = [np.zeros((self._single_sos.shape[0], 2)) for _ in range(2)]
-            self._net_zi = [
-                [np.zeros((s.shape[0], 2)) for s in self._net_sos] for _ in range(2)
+            self._single_zi = np.zeros((self._single_sos.shape[0], 2, 2), dtype=np.float64)
+            self._net_series_zi = np.zeros((self._net_series_sos.shape[0], 2, 2), dtype=np.float64)
+            self._net_par_zi = [
+                np.zeros((s.shape[0], 2, 2), dtype=np.float64) for s in self._net_sos
             ]
-            self._bank_lp_zi = [
-                [np.zeros((s.shape[0], 2)) for s in self._bank_lp_sos] for _ in range(2)
-            ]
-            self._bank_hp_zi = [
-                [np.zeros((s.shape[0], 2)) for s in self._bank_hp_sos] for _ in range(2)
-            ]
-            self._geq_zi = [
-                np.zeros((self._geq_stacked_sos.shape[0], 2)) for _ in range(2)
-            ]
-            self._peq_zi = [
-                np.zeros((self._peq_stacked_sos.shape[0], 2)) for _ in range(2)
-            ]
+            for bzi in self._bank_branch_zi:
+                bzi.fill(0.0)
+            self._geq_zi = np.zeros((self._geq_stacked_sos.shape[0], 2, 2), dtype=np.float64)
+            self._peq_zi = np.zeros((self._peq_stacked_sos.shape[0], 2, 2), dtype=np.float64)
             self._aux_fx.reset()
 
     def set_mode(self, mode: str) -> None:
@@ -260,7 +299,7 @@ class FilterDSPProcessor:
                 cfg.filter_type, cfg.freq, self.sample_rate, cfg.q, cfg.gain_db, cfg.order, cfg.drive
             )
             if new_sos.shape != self._single_sos.shape:
-                self._single_zi = [np.zeros((new_sos.shape[0], 2)) for _ in range(2)]
+                self._single_zi = np.zeros((new_sos.shape[0], 2, 2), dtype=np.float64)
             self._single_sos = new_sos
 
     def update_network(self, cfg: NetworkConfig) -> None:
@@ -290,34 +329,33 @@ class FilterDSPProcessor:
 
     def _rebuild_network(self, preserve_zi: bool) -> None:
         new_sos: list[np.ndarray] = []
-        new_lp: list[np.ndarray] = []
-        new_hp: list[np.ndarray] = []
-        for st in self.network_cfg.stages:
+        active_sos: list[np.ndarray] = []
+        for idx, st in enumerate(self.network_cfg.stages):
+            _fill_bank_branch(self._bank_branch_sos[idx], st.freq, st.q, self.sample_rate)
             if not st.enabled:
                 s = IDENTITY_SOS.copy()
             elif self.network_cfg.topology == "bank":
-                s = design_filter("bandpass", st.freq, self.sample_rate, st.q, 0.0, 2)
+                s = self._bank_branch_sos[idx][0:1].copy()
             else:
                 s = design_filter(
                     st.filter_type, st.freq, self.sample_rate, st.q, st.gain_db, st.order
                 )
+                active_sos.append(s)
             new_sos.append(s)
-            new_lp.append(
-                design_filter("lowpass", clamp_freq(st.freq * 2.5, self.sample_rate), self.sample_rate, 0.7071, 0.0, 2)
-            )
-            new_hp.append(
-                design_filter("highpass", clamp_freq(st.freq * 0.4, self.sample_rate), self.sample_rate, 0.7071, 0.0, 2)
-            )
+
+        series_stacked = np.vstack(active_sos) if active_sos else IDENTITY_SOS.copy()
+        if not preserve_zi or series_stacked.shape != self._net_series_sos.shape:
+            self._net_series_zi = np.zeros((series_stacked.shape[0], 2, 2), dtype=np.float64)
+        self._net_series_sos = series_stacked
 
         if not preserve_zi or len(new_sos) != len(self._net_sos) or any(
             a.shape != b.shape for a, b in zip(new_sos, self._net_sos)
         ):
-            self._net_zi = [[np.zeros((s.shape[0], 2)) for s in new_sos] for _ in range(2)]
-            self._bank_lp_zi = [[np.zeros((s.shape[0], 2)) for s in new_lp] for _ in range(2)]
-            self._bank_hp_zi = [[np.zeros((s.shape[0], 2)) for s in new_hp] for _ in range(2)]
+            self._net_par_zi = [np.zeros((s.shape[0], 2, 2), dtype=np.float64) for s in new_sos]
+            if not preserve_zi:
+                for bzi in self._bank_branch_zi:
+                    bzi.fill(0.0)
         self._net_sos = new_sos
-        self._bank_lp_sos = new_lp
-        self._bank_hp_sos = new_hp
 
     def _rebuild_graphic_eq(self, preserve_zi: bool) -> None:
         freqs = self.graphic_cfg.active_frequencies()
@@ -334,7 +372,7 @@ class FilterDSPProcessor:
                 active_sos.append(sec)
         stacked = np.vstack(active_sos) if active_sos else IDENTITY_SOS.copy()
         if not preserve_zi or stacked.shape != self._geq_stacked_sos.shape:
-            self._geq_zi = [np.zeros((stacked.shape[0], 2)) for _ in range(2)]
+            self._geq_zi = np.zeros((stacked.shape[0], 2, 2), dtype=np.float64)
         self._geq_sos = new_sos
         self._geq_stacked_sos = stacked
         self._geq_is_identity = not active_sos
@@ -351,7 +389,7 @@ class FilterDSPProcessor:
                 active_sos.append(sec)
         stacked = np.vstack(active_sos) if active_sos else IDENTITY_SOS.copy()
         if not preserve_zi or stacked.shape != self._peq_stacked_sos.shape:
-            self._peq_zi = [np.zeros((stacked.shape[0], 2)) for _ in range(2)]
+            self._peq_zi = np.zeros((stacked.shape[0], 2, 2), dtype=np.float64)
         self._peq_sos = new_sos
         self._peq_stacked_sos = stacked
         self._peq_is_identity = not active_sos
@@ -367,11 +405,7 @@ class FilterDSPProcessor:
                 for idx, st in enumerate(self.network_cfg.stages):
                     if st.enabled:
                         if topo == "bank":
-                            active_sos.append(
-                                np.vstack(
-                                    [self._net_sos[idx], self._bank_lp_sos[idx], self._bank_hp_sos[idx]]
-                                )
-                            )
+                            active_sos.append(self._bank_branch_sos[idx].copy())
                         else:
                             active_sos.append(self._net_sos[idx].copy())
                 if not active_sos:
@@ -394,9 +428,8 @@ class FilterDSPProcessor:
             return {"topology": "series", "sos_list": [IDENTITY_SOS.copy()]}
 
     def _process_filter_block(self, x: np.ndarray) -> np.ndarray:
-        """Process (N, 2) float64 audio through the active filter stage."""
+        """Process (N, 2) float64 stereo audio through the active filter stage in C."""
         n = x.shape[0]
-        y = np.empty_like(x)
 
         if self.mode == "single":
             work = x
@@ -404,10 +437,9 @@ class FilterDSPProcessor:
             drive = max(1.0, float(self.single_cfg.drive))
             if is_moog and drive > 1.01:
                 work = np.tanh(work * drive) / math.tanh(drive)
-            for ch in range(2):
-                y[:, ch], self._single_zi[ch] = signal.sosfilt(
-                    self._single_sos, work[:, ch], zi=self._single_zi[ch]
-                )
+            y, self._single_zi = signal.sosfilt(
+                self._single_sos, work, axis=0, zi=self._single_zi
+            )
             return y
 
         if self.mode == "network":
@@ -417,79 +449,56 @@ class FilterDSPProcessor:
                 return x.copy()
 
             if topo == "series":
-                for ch in range(2):
-                    sig = x[:, ch]
-                    for idx in active_indices:
-                        sig, self._net_zi[ch][idx] = signal.sosfilt(
-                            self._net_sos[idx], sig, zi=self._net_zi[ch][idx]
-                        )
-                    y[:, ch] = sig
+                y, self._net_series_zi = signal.sosfilt(
+                    self._net_series_sos, x, axis=0, zi=self._net_series_zi
+                )
                 return y
 
             if topo == "parallel":
-                y.fill(0.0)
+                acc = np.zeros_like(x)
                 scale = 1.0 / len(active_indices)
-                for ch in range(2):
-                    acc = np.zeros(n, dtype=np.float64)
-                    for idx in active_indices:
-                        out_i, self._net_zi[ch][idx] = signal.sosfilt(
-                            self._net_sos[idx], x[:, ch], zi=self._net_zi[ch][idx]
-                        )
-                        acc += out_i
-                    y[:, ch] = acc * scale
-                return y
+                for idx in active_indices:
+                    out_i, self._net_par_zi[idx] = signal.sosfilt(
+                        self._net_sos[idx], x, axis=0, zi=self._net_par_zi[idx]
+                    )
+                    acc += out_i
+                acc *= scale
+                return acc
 
-            # "bank" — modulated parallel chains (BP -> LP -> HP) as on Slide 12
+            # "bank" — modulated parallel chains (BP -> LP -> HP) stacked per branch
             block_dt = n / self.sample_rate
+            acc = np.zeros_like(x)
+            scale = 1.0 / len(active_indices)
             for idx in active_indices:
                 st = self.network_cfg.stages[idx]
                 if st.env_enabled:
                     self._lfo_phases[idx] = (self._lfo_phases[idx] + st.env_rate_hz * block_dt) % 1.0
                     lfo = math.sin(2.0 * math.pi * self._lfo_phases[idx])
-                    mod_freq = clamp_freq(st.freq * (2.0 ** (lfo * st.env_depth_oct)), self.sample_rate)
+                    mod_freq = st.freq * (2.0 ** (lfo * st.env_depth_oct))
                     mod_q = max(0.3, st.q * (1.0 + 0.35 * lfo))
-                    self._net_sos[idx] = design_filter("bandpass", mod_freq, self.sample_rate, mod_q, 0.0, 2)
-                    self._bank_lp_sos[idx] = design_filter(
-                        "lowpass", clamp_freq(mod_freq * 2.5, self.sample_rate), self.sample_rate, 0.7071, 0.0, 2
-                    )
-                    self._bank_hp_sos[idx] = design_filter(
-                        "highpass", clamp_freq(mod_freq * 0.4, self.sample_rate), self.sample_rate, 0.7071, 0.0, 2
-                    )
+                    _fill_bank_branch(self._bank_branch_sos[idx], mod_freq, mod_q, self.sample_rate)
 
-            y.fill(0.0)
-            scale = 1.0 / len(active_indices)
-            for ch in range(2):
-                acc = np.zeros(n, dtype=np.float64)
-                for idx in active_indices:
-                    sig, self._net_zi[ch][idx] = signal.sosfilt(
-                        self._net_sos[idx], x[:, ch], zi=self._net_zi[ch][idx]
-                    )
-                    sig, self._bank_lp_zi[ch][idx] = signal.sosfilt(
-                        self._bank_lp_sos[idx], sig, zi=self._bank_lp_zi[ch][idx]
-                    )
-                    sig, self._bank_hp_zi[ch][idx] = signal.sosfilt(
-                        self._bank_hp_sos[idx], sig, zi=self._bank_hp_zi[ch][idx]
-                    )
-                    acc += sig
-                y[:, ch] = acc * scale
-            return y
+                out_i, self._bank_branch_zi[idx] = signal.sosfilt(
+                    self._bank_branch_sos[idx], x, axis=0, zi=self._bank_branch_zi[idx]
+                )
+                acc += out_i
+            acc *= scale
+            return acc
 
         if self.mode == "graphic_eq":
             if self._geq_is_identity:
                 return x.copy()
-            for ch in range(2):
-                y[:, ch], self._geq_zi[ch] = signal.sosfilt(
-                    self._geq_stacked_sos, x[:, ch], zi=self._geq_zi[ch]
-                )
+            y, self._geq_zi = signal.sosfilt(
+                self._geq_stacked_sos, x, axis=0, zi=self._geq_zi
+            )
             return y
 
         if self.mode == "parametric_eq":
             if self._peq_is_identity:
                 return x.copy()
-            for ch in range(2):
-                y[:, ch], self._peq_zi[ch] = signal.sosfilt(
-                    self._peq_stacked_sos, x[:, ch], zi=self._peq_zi[ch]
-                )
+            y, self._peq_zi = signal.sosfilt(
+                self._peq_stacked_sos, x, axis=0, zi=self._peq_zi
+            )
             return y
 
         return x.copy()
