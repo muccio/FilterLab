@@ -50,11 +50,11 @@ Include inoltre un **Quiz di Verifica a 10 domande** con correzione immediata e 
 Scarica i pacchetti precompilati dalla sezione **[GitHub Releases](https://github.com/muccio/FilterLab/releases)**:
 
 - **macOS (Apple Silicon `arm64` / Intel `x86_64`):**
-  - `FilterLab-1.0.0-macos-<arch>.dmg` — Apri il DMG e trascina `FilterLab.app` in `Applicazioni`.
-  - `FilterLab-1.0.0-macos-<arch>.app.zip` — Archivio portatile pronto all'uso.
+  - `FilterLab-1.0.1-macos-<arch>.dmg` — Apri il DMG e trascina `FilterLab.app` in `Applicazioni`.
+  - `FilterLab-1.0.1-macos-<arch>.app.zip` — Archivio portatile pronto all'uso.
 - **Windows (`x64`):**
-  - `FilterLab-Setup-1.0.0-windows-x64.exe` — Installer guidato Inno Setup con collegamenti Start/Desktop.
-  - `FilterLab-1.0.0-windows-x64-portable.zip` — Cartella portatile con `FilterLab.exe`.
+  - `FilterLab-Setup-1.0.1-windows-x64.exe` — Installer guidato Inno Setup con collegamenti Start/Desktop.
+  - `FilterLab-1.0.1-windows-x64-portable.zip` — Cartella portatile con `FilterLab.exe`.
 
 ---
 

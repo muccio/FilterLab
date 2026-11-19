@@ -437,21 +437,19 @@ def compute_impulse_response(
             else ISO_20_BANDS if config.band_count == 20 else ISO_30_BANDS
         )
         q_val = 1.414 if config.band_count == 10 else 2.871 if config.band_count == 20 else 4.318
-        sig = delta.copy()
-        for f_c, g_db in zip(freqs, config.gains_db):
-            if abs(g_db) > 0.02:
-                sos = design_filter("peak", float(f_c), fs, q_val, float(g_db), 2)
-                sig = signal.sosfilt(sos, sig)
-        h = sig
+        sections = [
+            design_filter("peak", float(f_c), fs, q_val, float(g_db), 2)
+            for f_c, g_db in zip(freqs, config.gains_db)
+            if abs(g_db) > 0.02
+        ]
+        h = signal.sosfilt(np.vstack(sections), delta) if sections else delta.copy()
     elif mode_l == "parametric_eq":
-        sig = delta.copy()
-        for band in config.bands:
-            if band.enabled:
-                sos = design_filter(
-                    band.filter_type, band.freq, fs, band.q, band.gain_db, band.order
-                )
-                sig = signal.sosfilt(sos, sig)
-        h = sig
+        sections = [
+            design_filter(band.filter_type, band.freq, fs, band.q, band.gain_db, band.order)
+            for band in config.bands
+            if band.enabled
+        ]
+        h = signal.sosfilt(np.vstack(sections), delta) if sections else delta.copy()
     else:
         h = delta.copy()
 

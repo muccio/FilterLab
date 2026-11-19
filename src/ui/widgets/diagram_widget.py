@@ -5,10 +5,23 @@ from __future__ import annotations
 import math
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSlider, QVBoxLayout, QWidget
 
 from src.dsp.filter_design import compute_sos_response, design_filter, log_frequency_grid
+
+
+def _system_font(size: int, bold: bool = False, mono: bool = False) -> QFont:
+    kind = (
+        QFontDatabase.SystemFont.FixedFont
+        if mono
+        else QFontDatabase.SystemFont.GeneralFont
+    )
+    font = QFontDatabase.systemFont(kind)
+    font.setPointSize(size)
+    if bold:
+        font.setWeight(QFont.Weight.Bold)
+    return font
 
 
 class _DiagramCanvas(QWidget):
@@ -18,6 +31,12 @@ class _DiagramCanvas(QWidget):
         self.kind: str = "blackbox"
         self.param_a: float = 1000.0  # Cutoff / Center freq / Fader dB
         self.param_b: float = 2.0  # Q / Order / Aux send
+        self._font_8_b = _system_font(8, bold=True)
+        self._font_8_m = _system_font(8, mono=True)
+        self._font_9 = _system_font(9)
+        self._font_9_b = _system_font(9, bold=True)
+        self._font_10_b = _system_font(10, bold=True)
+        self._font_11_b = _system_font(11, bold=True)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         _ = event
@@ -52,7 +71,7 @@ class _DiagramCanvas(QWidget):
         p.setPen(QPen(QColor("#00d2ff"), 2))
         p.drawRoundedRect(QRectF(bx, by, bw, bh), 10, 10)
         p.setPen(QColor("#e0f9ff"))
-        p.setFont(QFont("Sans", 11, QFont.Weight.Bold))
+        p.setFont(self._font_11_b)
         p.drawText(QRectF(bx, by, bw, bh), Qt.AlignmentFlag.AlignCenter, "Digital Filter\n(Blackbox)")
 
         # Animated-style spectrum bars left vs right
@@ -65,7 +84,7 @@ class _DiagramCanvas(QWidget):
             bh_out = 28 * atten
             p.fillRect(QRectF(w - 150 + i * 16, cy + 44 - bh_out, 10, bh_out), col)
 
-        p.setFont(QFont("Sans", 9, QFont.Weight.Bold))
+        p.setFont(self._font_9_b)
         p.setPen(QColor("#f59e0b"))
         p.drawText(QPointF(38, cy - 16), "Input x[n]  (Wanted + Unwanted)")
         p.setPen(QColor("#00d2ff"))
@@ -77,7 +96,7 @@ class _DiagramCanvas(QWidget):
         p.setPen(QPen(QColor("#253047"), 1, Qt.PenStyle.DashLine))
         p.drawLine(QPointF(mid, 14), QPointF(mid, h - 14))
 
-        p.setFont(QFont("Sans", 10, QFont.Weight.Bold))
+        p.setFont(self._font_10_b)
         p.setPen(QColor("#00d2ff"))
         p.drawText(QPointF(24, 26), "Connessione in SERIE (Channel Strip)")
         y_s = h * 0.48
@@ -94,10 +113,10 @@ class _DiagramCanvas(QWidget):
             p.setPen(QColor("#e2e8f0"))
             p.drawText(QRectF(rx, y_s - 18, box_w, 36), Qt.AlignmentFlag.AlignCenter, f"Filter {i+1}")
         p.setPen(QColor("#94a3b8"))
-        p.setFont(QFont("Sans", 9))
+        p.setFont(self._font_9)
         p.drawText(QPointF(24, h - 24), "Ordini si sommano: 2° + 2° = 4° ordine (Slide 10)")
 
-        p.setFont(QFont("Sans", 10, QFont.Weight.Bold))
+        p.setFont(self._font_10_b)
         p.setPen(QColor("#f59e0b"))
         p.drawText(QPointF(mid + 20, 26), "Connessione in PARALLELO (Sommatore +)")
         sum_x = w - 58
@@ -118,7 +137,7 @@ class _DiagramCanvas(QWidget):
         p.drawText(QRectF(sum_x - 16, y_s - 16, 32, 32), Qt.AlignmentFlag.AlignCenter, "+")
 
     def _draw_filter_bank_diagram(self, p: QPainter, w: int, h: int) -> None:
-        p.setFont(QFont("Sans", 10, QFont.Weight.Bold))
+        p.setFont(self._font_10_b)
         p.setPen(QColor("#00d2ff"))
         p.drawText(QPointF(20, 24), "Banco Parallelo con Inviluppi (Slide 12): White Noise → [BP → LP → HP] → +")
         y0 = 56
@@ -136,7 +155,7 @@ class _DiagramCanvas(QWidget):
                 p.setPen(QPen(QColor("#38bdf8"), 1.3))
                 p.drawRoundedRect(QRectF(bx, ry - 13, 82, 26), 5, 5)
                 p.setPen(QColor("#e2e8f0"))
-                p.setFont(QFont("Sans", 8, QFont.Weight.Bold))
+                p.setFont(self._font_8_b)
                 p.drawText(QRectF(bx, ry - 13, 82, 26), Qt.AlignmentFlag.AlignCenter, name)
 
         p.setBrush(QColor("#1e293b"))
@@ -176,7 +195,7 @@ class _DiagramCanvas(QWidget):
             p.setPen(QPen(QColor(col), 2))
             p.drawRoundedRect(QRectF(bx, cy - bh * 0.5, bw, bh), 7, 7)
             p.setPen(QColor("#f1f5f9"))
-            p.setFont(QFont("Sans", 9, QFont.Weight.Bold))
+            p.setFont(self._font_9_b)
             p.drawText(QRectF(bx, cy - bh * 0.5, bw, bh), Qt.AlignmentFlag.AlignCenter, label)
 
         # Pre-Fader tap (before Fader) vs Post-Fader tap (after Fader)
@@ -189,7 +208,7 @@ class _DiagramCanvas(QWidget):
         p.setPen(QPen(QColor("#f59e0b"), 2))
         p.drawLine(QPointF(post_x, cy), QPointF(post_x, aux_y))
 
-        p.setFont(QFont("Sans", 8, QFont.Weight.Bold))
+        p.setFont(self._font_8_b)
         p.setPen(QColor("#00d2ff"))
         p.drawText(QPointF(pre_x - 36, aux_y + 15), "PRE-FADER (Monitor)")
         p.setPen(QColor("#f59e0b"))
@@ -284,7 +303,7 @@ class _DiagramCanvas(QWidget):
             p.drawPath(path)
 
         p.setPen(QColor("#74829c"))
-        p.setFont(QFont("Monospace", 8))
+        p.setFont(self._font_8_m)
         for gf in (20, 100, 1000, 10000, 20000):
             gx = r.left() + ((math.log10(gf) - log_min) / (log_max - log_min)) * r.width()
             lbl = f"{gf // 1000}k" if gf >= 1000 else str(gf)

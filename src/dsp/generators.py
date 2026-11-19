@@ -6,6 +6,11 @@ import math
 from enum import Enum
 
 import numpy as np
+from scipy import signal
+
+# 3rd-order -3 dB/oct Pink Noise shaping IIR filter (Julius O. Smith III)
+_PINK_B = np.array([0.049922035, -0.095993537, 0.050612699, -0.004408786], dtype=np.float64)
+_PINK_A = np.array([1.0, -2.494956002, 2.017265875, -0.522189400], dtype=np.float64)
 
 
 class GeneratorType(str, Enum):
@@ -53,8 +58,8 @@ class SignalGenerator:
         self._sweep_duration_s: float = 6.0
         self._impulse_counter: int = 0
 
-        # Paul Kellet 7-pole pink noise state
-        self._b = np.zeros(7, dtype=np.float64)
+        # 3rd-order pink noise IIR state
+        self._pink_zi: np.ndarray = np.zeros(3, dtype=np.float64)
 
     def set_sample_rate(self, sample_rate: float) -> None:
         self.sample_rate = max(8000.0, float(sample_rate))
@@ -81,40 +86,23 @@ class SignalGenerator:
         self._sweep_elapsed = 0.0
         self._sweep_phase = 0.0
         self._impulse_counter = 0
-        self._b.fill(0.0)
+        self._pink_zi.fill(0.0)
 
     def _generate_white(self, n: int) -> np.ndarray:
-        # Unit variance Gaussian scaled so RMS ~ 0.35 (-9 dBFS before level_db trim)
+        # Unit variance Gaussian scaled so RMS ~ 0.32
         x = self.rng.standard_normal(n) * 0.32
         return np.clip(x, -0.95, 0.95)
 
     def _generate_pink(self, n: int) -> np.ndarray:
-        white = self.rng.standard_normal(n) * 0.25
-        out = np.empty(n, dtype=np.float64)
-        b0, b1, b2, b3, b4, b5, b6 = self._b
-        for i in range(n):
-            w = white[i]
-            b0 = 0.99886 * b0 + w * 0.0555179
-            b1 = 0.99332 * b1 + w * 0.0750759
-            b2 = 0.96900 * b2 + w * 0.1538520
-            b3 = 0.86650 * b3 + w * 0.3104856
-            b4 = 0.55000 * b4 + w * 0.5329522
-            b5 = -0.7616 * b5 - w * 0.0168980
-            out[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11
-            b6 = w * 0.115926
-        self._b[:] = [b0, b1, b2, b3, b4, b5, b6]
+        white = self.rng.standard_normal(n) * 1.4
+        out, self._pink_zi = signal.lfilter(_PINK_B, _PINK_A, white, zi=self._pink_zi)
         return np.clip(out, -0.95, 0.95)
 
     def _generate_impulse(self, n: int) -> np.ndarray:
-        out = np.zeros(n, dtype=np.float64)
         period = max(16, int(round(self.sample_rate / self.impulse_rate_hz)))
-        cnt = self._impulse_counter
-        for i in range(n):
-            if cnt == 0:
-                out[i] = 0.95
-            cnt = (cnt + 1) % period
-        self._impulse_counter = cnt
-        return out
+        indices = (self._impulse_counter + np.arange(n, dtype=np.int64)) % period
+        self._impulse_counter = int((self._impulse_counter + n) % period)
+        return np.where(indices == 0, 0.95, 0.0)
 
     def _advance_phase(self, n: int, freq: float) -> tuple[np.ndarray, float]:
         dt = freq / self.sample_rate
@@ -145,28 +133,15 @@ class SignalGenerator:
         ln_ratio = math.log(f_end / f_start)
         inv_fs = 1.0 / self.sample_rate
 
-        out = np.empty(n, dtype=np.float64)
-        t_el = self._sweep_elapsed
-        ph = self._sweep_phase
-        for i in range(n):
-            frac = t_el / dur
-            inst_freq = f_start * math.exp(ln_ratio * frac)
-            ph += 2.0 * math.pi * inst_freq * inv_fs
-            if ph > 2.0 * math.pi:
-                ph -= 2.0 * math.pi
-            # Short 20 ms fade-in/out at sweep boundaries to avoid clicks on loop
-            env = 1.0
-            if t_el < 0.02:
-                env = t_el / 0.02
-            elif t_el > dur - 0.02:
-                env = max(0.0, (dur - t_el) / 0.02)
-            out[i] = math.sin(ph) * env
-            t_el += inv_fs
-            if t_el >= dur:
-                t_el -= dur
-        self._sweep_elapsed = t_el
-        self._sweep_phase = ph
-        return out
+        t_vec = (self._sweep_elapsed + np.arange(n, dtype=np.float64) * inv_fs) % dur
+        inst_freqs = f_start * np.exp((ln_ratio / dur) * t_vec)
+        d_phases = (2.0 * math.pi * inv_fs) * inst_freqs
+        phases = self._sweep_phase + np.cumsum(d_phases)
+        self._sweep_phase = float(phases[-1] % (2.0 * math.pi))
+        self._sweep_elapsed = float((self._sweep_elapsed + n * inv_fs) % dur)
+
+        env = np.clip(np.minimum(t_vec / 0.02, (dur - t_vec) / 0.02), 0.0, 1.0)
+        return np.sin(phases) * env
 
     def _generate_synth_chord(self, n: int) -> np.ndarray:
         # Warm Am7 chord centered around base freq (default 110 Hz -> A2, C3, E3, G3)

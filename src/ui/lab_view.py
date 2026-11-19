@@ -116,7 +116,8 @@ class LabView(QWidget):
         super().__init__(parent)
         self.engine = engine
         self._syncing = False
-        self._bode_freqs = log_frequency_grid(480)
+        self._bode_freqs = log_frequency_grid(300)
+        self._tick_count = 0
 
         # Config models
         self._single_cfg = SingleFilterConfig()
@@ -186,10 +187,10 @@ class LabView(QWidget):
         self._apply_all_configs_to_dsp()
         self._refresh_visual_curves()
 
-        # 30 ms timer for live FFT, scope, blackbox, meters, and file position
+        # 40 ms timer (~25 fps) for live FFT, scope, blackbox, meters, and file position
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
-        self._timer.start(30)
+        self._timer.start(40)
 
     # ------------------------------------------------------------------
     # Source Bar
@@ -987,6 +988,7 @@ class LabView(QWidget):
         self.bode_widget.show_fft = self._chk_fft.isChecked()
         self.bode_widget.show_phase = self._chk_phase.isChecked()
         self.bode_widget.show_ideal = self._chk_ideal.isChecked()
+        self.bode_widget.invalidate_static_cache()
         self._refresh_visual_curves()
 
     def _update_gen_visibility(self) -> None:
@@ -1694,30 +1696,43 @@ class LabView(QWidget):
                     self.audio_state_changed()
 
     # ------------------------------------------------------------------
-    # Live UI Tick (30 ms)
+    # Live UI Tick (40 ms / 25 fps)
     # ------------------------------------------------------------------
     def _on_tick(self) -> None:
-        snap = self.engine.get_visual_snapshot()
+        if not self.isVisible():
+            return
+        self._tick_count += 1
+        need_fft = self.bode_widget.show_fft
+        need_time_waves = self.time_widget.view_mode in ("scope", "blackbox")
+        snap = self.engine.get_visual_snapshot(include_waves=need_fft or need_time_waves)
+
         self._stereo_meter.update_levels(
             snap["out_peak_l_db"], snap["out_peak_r_db"], snap["overload"]
         )
         self._aux_meter.set_level_db(snap["aux_peak_db"])
-        self._lbl_io_peaks.setText(
-            f"In: {snap['in_peak_db']:+.1f} dB | Out: {max(snap['out_peak_l_db'], snap['out_peak_r_db']):+.1f} dB"
-        )
+        if self._tick_count % 3 == 0:
+            self._lbl_io_peaks.setText(
+                f"In: {snap['in_peak_db']:+.1f} dB | Out: {max(snap['out_peak_l_db'], snap['out_peak_r_db']):+.1f} dB"
+            )
 
         if self.engine.source_mode == SourceMode.FILE:
             self._waveform_seek.set_position(snap["file_pos_ratio"])
 
         if snap["running"]:
-            self.bode_widget.update_fft(
-                snap["pre_samples"], snap["post_samples"], snap["sample_rate"]
-            )
-            self.time_widget.update_live_waves(
-                snap["pre_samples"], snap["post_samples"], snap["sample_rate"]
-            )
-            # In modulated bank mode, refresh Bode curve smoothly to show LFO filter movement
-            if self.engine.processor.mode == "network" and self._net_cfg.topology == "bank":
+            if need_fft:
+                self.bode_widget.update_fft(
+                    snap["pre_samples"], snap["post_samples"], snap["sample_rate"]
+                )
+            if need_time_waves:
+                self.time_widget.update_live_waves(
+                    snap["pre_samples"], snap["post_samples"], snap["sample_rate"]
+                )
+            # In modulated bank mode, refresh Bode curve at ~8 Hz to show LFO filter movement
+            if (
+                self._tick_count % 3 == 0
+                and self.engine.processor.mode == "network"
+                and self._net_cfg.topology == "bank"
+            ):
                 info = self.engine.processor.get_active_bode_sos()
                 mag_db, phase_deg, indiv = compute_parallel_response(
                     info["sos_list"], info.get("gains"), self._bode_freqs, snap["sample_rate"]

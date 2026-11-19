@@ -5,8 +5,21 @@ from __future__ import annotations
 import time
 import numpy as np
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import QWidget
+
+
+def _system_font(size: int, bold: bool = False, mono: bool = False) -> QFont:
+    kind = (
+        QFontDatabase.SystemFont.FixedFont
+        if mono
+        else QFontDatabase.SystemFont.GeneralFont
+    )
+    font = QFontDatabase.systemFont(kind)
+    font.setPointSize(size)
+    if bold:
+        font.setWeight(QFont.Weight.Bold)
+    return font
 
 
 class StereoMeterWidget(QWidget):
@@ -21,15 +34,37 @@ class StereoMeterWidget(QWidget):
         self._hold_l = -60.0
         self._hold_r = -60.0
         self._overload_until = 0.0
+        self._last_led_on = False
+
+        self._font_label = _system_font(8, bold=True)
+        self._font_scale = _system_font(8, mono=True)
+        self._grad_bounds: tuple[int, int] | None = None
+        self._grad: QLinearGradient | None = None
 
     def update_levels(self, l_db: float, r_db: float, overload: bool) -> None:
-        self._l_db = max(-60.0, min(0.0, float(l_db)))
-        self._r_db = max(-60.0, min(0.0, float(r_db)))
-        self._hold_l = max(self._l_db, self._hold_l - 0.45)
-        self._hold_r = max(self._r_db, self._hold_r - 0.45)
+        new_l = max(-60.0, min(0.0, float(l_db)))
+        new_r = max(-60.0, min(0.0, float(r_db)))
+        new_hl = max(new_l, self._hold_l - 0.45)
+        new_hr = max(new_r, self._hold_r - 0.45)
+        now = time.monotonic()
         if overload:
-            self._overload_until = time.monotonic() + 1.2
-        self.update()
+            self._overload_until = now + 1.2
+        led_on = now < self._overload_until
+
+        changed = (
+            abs(new_l - self._l_db) >= 0.15
+            or abs(new_r - self._r_db) >= 0.15
+            or abs(new_hl - self._hold_l) >= 0.15
+            or abs(new_hr - self._hold_r) >= 0.15
+            or led_on != self._last_led_on
+        )
+        self._l_db = new_l
+        self._r_db = new_r
+        self._hold_l = new_hl
+        self._hold_r = new_hr
+        self._last_led_on = led_on
+        if changed:
+            self.update()
 
     def _db_to_ratio(self, db: float) -> float:
         return max(0.0, min(1.0, (db + 60.0) / 60.0))
@@ -37,7 +72,6 @@ class StereoMeterWidget(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802
         _ = event
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         w, h = self.width(), self.height()
         p.fillRect(self.rect(), QColor("#0d0f14"))
@@ -50,7 +84,7 @@ class StereoMeterWidget(QWidget):
         p.setBrush(led_col)
         p.drawRoundedRect(6, 4, w - 12, led_rect_h, 4, 4)
         p.setPen(QColor("#ffffff") if led_on else QColor("#8f5e66"))
-        p.setFont(QFont("Sans", 8, QFont.Weight.Bold))
+        p.setFont(self._font_label)
         p.drawText(6, 4, w - 12, led_rect_h, Qt.AlignmentFlag.AlignCenter, "OL")
 
         top = 26
@@ -61,31 +95,34 @@ class StereoMeterWidget(QWidget):
         lx = 10
         rx = 10 + bar_w + 5
 
-        grad = QLinearGradient(0, bot, 0, top)
-        grad.setColorAt(0.0, QColor("#10b981"))
-        grad.setColorAt(0.75, QColor("#10b981"))
-        grad.setColorAt(0.85, QColor("#f59e0b"))
-        grad.setColorAt(1.0, QColor("#ef4444"))
+        if self._grad_bounds != (top, bot) or self._grad is None:
+            grad = QLinearGradient(0, bot, 0, top)
+            grad.setColorAt(0.0, QColor("#10b981"))
+            grad.setColorAt(0.75, QColor("#10b981"))
+            grad.setColorAt(0.85, QColor("#f59e0b"))
+            grad.setColorAt(1.0, QColor("#ef4444"))
+            self._grad = grad
+            self._grad_bounds = (top, bot)
 
+        pen_hold = QPen(QColor("#e2e8f0"), 2)
         for x_pos, val_db, hold_db in ((lx, self._l_db, self._hold_l), (rx, self._r_db, self._hold_r)):
             p.fillRect(x_pos, top, bar_w, bar_h, QColor("#171b24"))
             fill_h = int(self._db_to_ratio(val_db) * bar_h)
             if fill_h > 0:
-                p.fillRect(x_pos, bot - fill_h, bar_w, fill_h, grad)
+                p.fillRect(x_pos, bot - fill_h, bar_w, fill_h, self._grad)
             hy = bot - int(self._db_to_ratio(hold_db) * bar_h)
-            p.setPen(QPen(QColor("#e2e8f0"), 2))
+            p.setPen(pen_hold)
             p.drawLine(x_pos, hy, x_pos + bar_w, hy)
 
-        # dB ticks on right
         p.setPen(QColor("#64748b"))
-        p.setFont(QFont("Monospace", 8))
+        p.setFont(self._font_scale)
         scale_x = rx + bar_w + 4
         for tick_db in (0, -6, -12, -24, -48):
             ty = bot - int(self._db_to_ratio(float(tick_db)) * bar_h)
             p.drawText(scale_x, ty - 5, w - scale_x - 2, 12, Qt.AlignmentFlag.AlignLeft, f"{tick_db}")
 
         p.setPen(QColor("#94a3b8"))
-        p.setFont(QFont("Sans", 8, QFont.Weight.Bold))
+        p.setFont(self._font_label)
         p.drawText(lx, bot + 2, bar_w, 14, Qt.AlignmentFlag.AlignCenter, "L")
         p.drawText(rx, bot + 2, bar_w, 14, Qt.AlignmentFlag.AlignCenter, "R")
 
@@ -99,8 +136,10 @@ class AuxMeterBar(QWidget):
         self._db = -60.0
 
     def set_level_db(self, db: float) -> None:
-        self._db = max(-60.0, min(0.0, float(db)))
-        self.update()
+        new_db = max(-60.0, min(0.0, float(db)))
+        if abs(new_db - self._db) >= 0.15:
+            self._db = new_db
+            self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         _ = event
@@ -137,8 +176,10 @@ class WaveformSeekWidget(QWidget):
         self.update()
 
     def set_position(self, ratio: float) -> None:
-        self._pos_ratio = max(0.0, min(1.0, float(ratio)))
-        self.update()
+        new_ratio = max(0.0, min(1.0, float(ratio)))
+        if abs(new_ratio - self._pos_ratio) >= 0.002:
+            self._pos_ratio = new_ratio
+            self.update()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton and self.width() > 0:
@@ -148,7 +189,6 @@ class WaveformSeekWidget(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802
         _ = event
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
         p.fillRect(self.rect(), QColor("#11151e"))
 
@@ -156,13 +196,21 @@ class WaveformSeekWidget(QWidget):
         mid = h * 0.5
         if n > 0:
             step = w / float(n)
-            for i in range(n):
-                amp = float(self._peaks[i]) * (h * 0.44)
-                x = i * step
-                played = (i / float(n)) <= self._pos_ratio
-                col = QColor("#00d2ff") if played else QColor("#3a4761")
-                p.setPen(QPen(col, max(1.0, step * 0.7)))
-                p.drawLine(int(x), int(mid - amp), int(x), int(mid + amp))
+            pen_w = max(1.0, step * 0.7)
+            pen_played = QPen(QColor("#00d2ff"), pen_w)
+            pen_unplayed = QPen(QColor("#3a4761"), pen_w)
+            split_idx = int(self._pos_ratio * n)
+            amps = (self._peaks * (h * 0.44)).tolist()
+            p.setPen(pen_played)
+            for i in range(min(split_idx + 1, n)):
+                x = int(i * step)
+                amp = amps[i]
+                p.drawLine(x, int(mid - amp), x, int(mid + amp))
+            p.setPen(pen_unplayed)
+            for i in range(min(split_idx + 1, n), n):
+                x = int(i * step)
+                amp = amps[i]
+                p.drawLine(x, int(mid - amp), x, int(mid + amp))
 
         px = int(self._pos_ratio * w)
         p.setPen(QPen(QColor("#ffffff"), 2))

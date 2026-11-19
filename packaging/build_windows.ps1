@@ -12,7 +12,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
-$Version = "1.0.0"
+$Version = "1.0.1"
 
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host " FilterLab Windows Standalone Packaging Pipeline" -ForegroundColor Cyan

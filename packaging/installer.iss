@@ -4,7 +4,7 @@
 ; ==============================================================================
 
 #define MyAppName "FilterLab"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "Mario Salvucci — Musica Applicata Suite"
 #define MyAppURL "https://github.com/muccio/FilterLab"
 #define MyAppExeName "FilterLab.exe"

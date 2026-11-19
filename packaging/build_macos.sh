@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # FilterLab macOS Standalone Application Bundle & DMG Generation Script
-# Output: dist/FilterLab.app, dist/FilterLab-1.0.0-macos-<arch>.app.zip & .dmg
+# Output: dist/FilterLab.app, dist/FilterLab-1.0.1-macos-<arch>.app.zip & .dmg
 # ==============================================================================
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="1.0.0"
+VERSION="1.0.1"
 
 echo "=== FilterLab macOS Standalone Packaging Pipeline ==="
 echo "Project Root: ${PROJECT_ROOT}"

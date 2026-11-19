@@ -40,7 +40,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self.setStyleSheet(DARK_THEME_QSS)
 
-        self.engine = AudioEngine(sample_rate=48000, block_size=512)
+        self.engine = AudioEngine(sample_rate=48000, block_size=1024)
 
         central = QWidget()
         self.setCentralWidget(central)

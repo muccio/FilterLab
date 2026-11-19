@@ -136,7 +136,7 @@ class _SimpleAuxFX:
         ]
         self._idx = [0, 0, 0, 0]
         self._fb = (0.58, 0.52, 0.48, 0.42)
-        self._lp_state = 0.0
+        self._lp_zi = np.zeros(1, dtype=np.float64)
 
     def set_sample_rate(self, fs: float) -> None:
         if abs(fs - self.sample_rate) > 1.0:
@@ -147,7 +147,7 @@ class _SimpleAuxFX:
         for b in self._bufs:
             b.fill(0.0)
         self._idx = [0, 0, 0, 0]
-        self._lp_state = 0.0
+        self._lp_zi.fill(0.0)
 
     def process_mono(self, x_mono: np.ndarray) -> np.ndarray:
         n = len(x_mono)
@@ -157,21 +157,27 @@ class _SimpleAuxFX:
             blen = len(buf)
             idx = self._idx[c]
             fb = self._fb[c]
-            for i in range(n):
-                delayed = buf[idx]
-                acc[i] += delayed * 0.35
-                buf[idx] = x_mono[i] + delayed * fb
-                idx += 1
-                if idx >= blen:
-                    idx = 0
+            offset = 0
+            while offset < n:
+                chunk = min(n - offset, blen)
+                if idx + chunk <= blen:
+                    delayed = buf[idx : idx + chunk].copy()
+                    acc[offset : offset + chunk] += delayed * 0.35
+                    buf[idx : idx + chunk] = x_mono[offset : offset + chunk] + delayed * fb
+                    idx = (idx + chunk) % blen
+                else:
+                    first = blen - idx
+                    rem = chunk - first
+                    d1 = buf[idx:].copy()
+                    d2 = buf[:rem].copy()
+                    acc[offset : offset + first] += d1 * 0.35
+                    acc[offset + first : offset + chunk] += d2 * 0.35
+                    buf[idx:] = x_mono[offset : offset + first] + d1 * fb
+                    buf[:rem] = x_mono[offset + first : offset + chunk] + d2 * fb
+                    idx = rem
+                offset += chunk
             self._idx[c] = idx
-        # Gentle high-cut damping
-        out = np.empty(n, dtype=np.float64)
-        lp = self._lp_state
-        for i in range(n):
-            lp = 0.65 * lp + 0.35 * acc[i]
-            out[i] = lp
-        self._lp_state = lp
+        out, self._lp_zi = signal.lfilter([0.35], [1.0, -0.65], acc, zi=self._lp_zi)
         return out
 
 
@@ -204,10 +210,12 @@ class FilterDSPProcessor:
 
         self._geq_sos: list[np.ndarray] = []
         self._geq_stacked_sos: np.ndarray = IDENTITY_SOS.copy()
+        self._geq_is_identity: bool = True
         self._geq_zi: list[np.ndarray] = [np.zeros((1, 2)), np.zeros((1, 2))]
 
         self._peq_sos: list[np.ndarray] = []
         self._peq_stacked_sos: np.ndarray = IDENTITY_SOS.copy()
+        self._peq_is_identity: bool = True
         self._peq_zi: list[np.ndarray] = [np.zeros((1, 2)), np.zeros((1, 2))]
 
         self._aux_fx = _SimpleAuxFX(self.sample_rate)
@@ -329,6 +337,7 @@ class FilterDSPProcessor:
             self._geq_zi = [np.zeros((stacked.shape[0], 2)) for _ in range(2)]
         self._geq_sos = new_sos
         self._geq_stacked_sos = stacked
+        self._geq_is_identity = not active_sos
 
     def _rebuild_parametric_eq(self, preserve_zi: bool) -> None:
         new_sos: list[np.ndarray] = []
@@ -345,6 +354,7 @@ class FilterDSPProcessor:
             self._peq_zi = [np.zeros((stacked.shape[0], 2)) for _ in range(2)]
         self._peq_sos = new_sos
         self._peq_stacked_sos = stacked
+        self._peq_is_identity = not active_sos
 
     def get_active_bode_sos(self) -> dict[str, Any]:
         """Snapshot active filter SOS & topology for Bode plot rendering."""
@@ -465,9 +475,7 @@ class FilterDSPProcessor:
             return y
 
         if self.mode == "graphic_eq":
-            if self._geq_stacked_sos.shape == IDENTITY_SOS.shape and np.allclose(
-                self._geq_stacked_sos, IDENTITY_SOS
-            ):
+            if self._geq_is_identity:
                 return x.copy()
             for ch in range(2):
                 y[:, ch], self._geq_zi[ch] = signal.sosfilt(
@@ -476,9 +484,7 @@ class FilterDSPProcessor:
             return y
 
         if self.mode == "parametric_eq":
-            if self._peq_stacked_sos.shape == IDENTITY_SOS.shape and np.allclose(
-                self._peq_stacked_sos, IDENTITY_SOS
-            ):
+            if self._peq_is_identity:
                 return x.copy()
             for ch in range(2):
                 y[:, ch], self._peq_zi[ch] = signal.sosfilt(

@@ -124,7 +124,7 @@ jobs:
 
             ### 📦 Download Installers & Binaries
             - **macOS (Apple Silicon `arm64` & Intel `x86_64`):** `.dmg` (drag-and-drop in Applicazioni) e `.app.zip`
-            - **Windows (`x64`):** `FilterLab-Setup-1.0.0-windows-x64.exe` (Installer guidato) e `FilterLab-1.0.0-windows-x64-portable.zip` (Portable)
+            - **Windows (`x64`):** `FilterLab-Setup-1.0.1-windows-x64.exe` (Installer guidato) e `FilterLab-1.0.1-windows-x64-portable.zip` (Portable)
 
             ### ✨ Funzionalità Principali
             - **Percorso Didattico Interattivo (10 Moduli + Quiz da 10 Domande):** copre Blackbox e campioni $\Delta t$, LowPass, HighPass, BandPass, BandReject, Quality Factor $Q$ e Ringing, Ordini/Roll-off/Butterworth, Moog Ladder, Serie vs Parallelo, Banchi di filtri modulati, EQ Grafica ISO (10/20/30 bande), Shelving/Peak/Notch/EQ Parametrico, Mandate Aux Pre/Post-Fader, Fader/PFL/VU Meter e Routing Mono→Pan-Pot→Stereo.

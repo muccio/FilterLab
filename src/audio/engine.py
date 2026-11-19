@@ -79,7 +79,7 @@ class AudioEngine:
 
     RING_SIZE = 4096
 
-    def __init__(self, sample_rate: int = 48000, block_size: int = 512) -> None:
+    def __init__(self, sample_rate: int = 48000, block_size: int = 1024) -> None:
         self.sample_rate: int = int(sample_rate)
         self.block_size: int = int(block_size)
 
@@ -208,7 +208,10 @@ class AudioEngine:
         pre = telemetry["pre_block_mono"]
         post = telemetry["post_block_mono"]
         n = min(len(pre), self.RING_SIZE)
-        with self._vis_lock:
+        # Never block the real-time audio callback thread waiting on GUI snapshots
+        if not self._vis_lock.acquire(blocking=False):
+            return
+        try:
             idx = self._ring_idx
             first = min(n, self.RING_SIZE - idx)
             self._pre_ring[idx : idx + first] = pre[:first]
@@ -225,6 +228,8 @@ class AudioEngine:
             self._out_peak_r_db = max(telemetry["out_peak_r_db"], self._out_peak_r_db - 2.5)
             self._aux_peak_db = max(telemetry["aux_peak_db"], self._aux_peak_db - 2.5)
             self._overload = bool(telemetry["overload"])
+        finally:
+            self._vis_lock.release()
 
     def _output_callback(self, outdata: np.ndarray, frames: int, time_info: Any, status: Any) -> None:
         _ = (time_info, status)
@@ -314,7 +319,8 @@ class AudioEngine:
 
                     stream = sd.Stream(
                         samplerate=sr,
-                        blocksize=self.block_size,
+                        blocksize=min(512, self.block_size),
+                        latency="low",
                         device=device_arg,
                         channels=(in_ch, 2),
                         dtype="float32",
@@ -325,6 +331,7 @@ class AudioEngine:
                     stream = sd.OutputStream(
                         samplerate=sr,
                         blocksize=self.block_size,
+                        latency="high",
                         device=self.output_device,
                         channels=2,
                         dtype="float32",
@@ -359,12 +366,16 @@ class AudioEngine:
             self._stream = None
         self._running = False
 
-    def get_visual_snapshot(self) -> dict[str, Any]:
-        """Thread-safe snapshot of ring buffers, meters, and playback state for 60fps UI."""
+    def get_visual_snapshot(self, include_waves: bool = True) -> dict[str, Any]:
+        """Thread-safe snapshot of ring buffers, meters, and playback state for UI."""
         with self._vis_lock:
-            idx = self._ring_idx
-            pre = np.concatenate((self._pre_ring[idx:], self._pre_ring[:idx])).copy()
-            post = np.concatenate((self._post_ring[idx:], self._post_ring[:idx])).copy()
+            if include_waves:
+                idx = self._ring_idx
+                pre = np.concatenate((self._pre_ring[idx:], self._pre_ring[:idx])).copy()
+                post = np.concatenate((self._post_ring[idx:], self._post_ring[:idx])).copy()
+            else:
+                pre = np.empty(0, dtype=np.float32)
+                post = np.empty(0, dtype=np.float32)
             in_db = self._in_peak_db
             out_l_db = self._out_peak_l_db
             out_r_db = self._out_peak_r_db
