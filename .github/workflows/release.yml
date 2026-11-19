@@ -9,29 +9,19 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-macos:
-    name: Build macOS (${{ matrix.os }} - ${{ matrix.arch }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            arch: arm64
-            python-arch: arm64
-          - os: macos-15-intel
-            arch: x86_64
-            python-arch: x64
+  build-macos-intel:
+    name: Build macOS (Intel x86_64)
+    runs-on: macos-15-intel
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12 (${{ matrix.arch }})
+      - name: Set up Python 3.12 (x86_64)
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          architecture: ${{ matrix.python-arch }}
+          architecture: 'x64'
           cache: 'pip'
 
       - name: Install dependencies
@@ -50,10 +40,10 @@ jobs:
         run: |
           bash packaging/build_macos.sh
 
-      - name: Upload macOS Artifacts
+      - name: Upload macOS Intel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: FilterLab-macos-${{ matrix.arch }}
+          name: FilterLab-macos-x86_64
           path: |
             dist/FilterLab-*-macos-*.app.zip
             dist/FilterLab-*-macos-*.dmg
@@ -106,8 +96,8 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    needs: [build-macos, build-windows]
-    if: startsWith(github.ref, 'refs/tags/v') && always() && (needs.build-windows.result == 'success' || needs.build-macos.result == 'success')
+    needs: [build-macos-intel, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -133,7 +123,7 @@ jobs:
             Sviluppato all'interno della suite **Musica Applicata**, basato sul percorso didattico delle 18 slide su Filtri Digitali, Equalizzatori e Channel Strip del Mixer.
 
             ### 📦 Download Installers & Binaries
-            - **macOS (Apple Silicon `arm64` / Intel `x86_64`):** `.dmg` (drag-and-drop in Applicazioni) e `.app.zip`
+            - **macOS (Apple Silicon `arm64` & Intel `x86_64`):** `.dmg` (drag-and-drop in Applicazioni) e `.app.zip`
             - **Windows (`x64`):** `FilterLab-Setup-1.0.0-windows-x64.exe` (Installer guidato) e `FilterLab-1.0.0-windows-x64-portable.zip` (Portable)
 
             ### ✨ Funzionalità Principali
@@ -144,3 +134,56 @@ jobs:
             release-assets/*
           draft: false
           prerelease: false
+
+  build-macos-arm64:
+    name: Build macOS (Apple Silicon arm64)
+    runs-on: macos-15
+    timeout-minutes: 20
+    continue-on-error: true
+    needs: [publish-release]
+    if: always() && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12 (arm64)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: 'arm64'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          pip install pyinstaller pytest
+
+      - name: Run Test Suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          pytest -v tests/
+
+      - name: Build macOS Standalone Bundle & DMG
+        run: |
+          bash packaging/build_macos.sh
+
+      - name: Upload macOS arm64 Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: FilterLab-macos-arm64
+          path: |
+            dist/FilterLab-*-macos-*.app.zip
+            dist/FilterLab-*-macos-*.dmg
+          retention-days: 14
+
+      - name: Attach macOS arm64 Assets to Release (if tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" dist/FilterLab-*-macos-*.dmg dist/FilterLab-*-macos-*.app.zip --clobber

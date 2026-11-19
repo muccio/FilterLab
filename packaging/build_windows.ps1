@@ -58,11 +58,12 @@ if (-not (Test-Path $ExeOutput)) {
 }
 
 Write-Host "Testing compiled executable (--check-build)..." -ForegroundColor Green
-& $ExeOutput --check-build
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "--check-build failed with exit code $LASTEXITCODE"
-    exit $LASTEXITCODE
+$proc = Start-Process -FilePath $ExeOutput -ArgumentList "--check-build" -Wait -PassThru
+if ($proc.ExitCode -ne 0) {
+    Write-Error "--check-build failed with exit code $($proc.ExitCode)"
+    exit $proc.ExitCode
 }
+Start-Sleep -Seconds 2
 
 $PortableZip = Join-Path $DistDir "FilterLab-$Version-windows-x64-portable.zip"
 Compress-Archive -Path (Join-Path $DistDir "FilterLab") -DestinationPath $PortableZip -Force

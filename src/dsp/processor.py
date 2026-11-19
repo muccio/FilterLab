@@ -203,10 +203,12 @@ class FilterDSPProcessor:
         self._lfo_phases: np.ndarray = np.zeros(4, dtype=np.float64)
 
         self._geq_sos: list[np.ndarray] = []
-        self._geq_zi: list[list[np.ndarray]] = [[], []]
+        self._geq_stacked_sos: np.ndarray = IDENTITY_SOS.copy()
+        self._geq_zi: list[np.ndarray] = [np.zeros((1, 2)), np.zeros((1, 2))]
 
         self._peq_sos: list[np.ndarray] = []
-        self._peq_zi: list[list[np.ndarray]] = [[], []]
+        self._peq_stacked_sos: np.ndarray = IDENTITY_SOS.copy()
+        self._peq_zi: list[np.ndarray] = [np.zeros((1, 2)), np.zeros((1, 2))]
 
         self._aux_fx = _SimpleAuxFX(self.sample_rate)
         self.rebuild_all()
@@ -230,10 +232,10 @@ class FilterDSPProcessor:
                 [np.zeros((s.shape[0], 2)) for s in self._bank_hp_sos] for _ in range(2)
             ]
             self._geq_zi = [
-                [np.zeros((s.shape[0], 2)) for s in self._geq_sos] for _ in range(2)
+                np.zeros((self._geq_stacked_sos.shape[0], 2)) for _ in range(2)
             ]
             self._peq_zi = [
-                [np.zeros((s.shape[0], 2)) for s in self._peq_sos] for _ in range(2)
+                np.zeros((self._peq_stacked_sos.shape[0], 2)) for _ in range(2)
             ]
             self._aux_fx.reset()
 
@@ -313,30 +315,36 @@ class FilterDSPProcessor:
         freqs = self.graphic_cfg.active_frequencies()
         q_val = self.graphic_cfg.active_q()
         new_sos: list[np.ndarray] = []
+        active_sos: list[np.ndarray] = []
         for idx, fc in enumerate(freqs):
             g_db = self.graphic_cfg.gains_db[idx] if idx < len(self.graphic_cfg.gains_db) else 0.0
             if abs(g_db) < 0.02:
                 new_sos.append(IDENTITY_SOS.copy())
             else:
-                new_sos.append(design_filter("peak", float(fc), self.sample_rate, q_val, float(g_db), 2))
-        if not preserve_zi or len(new_sos) != len(self._geq_sos):
-            self._geq_zi = [[np.zeros((s.shape[0], 2)) for s in new_sos] for _ in range(2)]
+                sec = design_filter("peak", float(fc), self.sample_rate, q_val, float(g_db), 2)
+                new_sos.append(sec)
+                active_sos.append(sec)
+        stacked = np.vstack(active_sos) if active_sos else IDENTITY_SOS.copy()
+        if not preserve_zi or stacked.shape != self._geq_stacked_sos.shape:
+            self._geq_zi = [np.zeros((stacked.shape[0], 2)) for _ in range(2)]
         self._geq_sos = new_sos
+        self._geq_stacked_sos = stacked
 
     def _rebuild_parametric_eq(self, preserve_zi: bool) -> None:
         new_sos: list[np.ndarray] = []
+        active_sos: list[np.ndarray] = []
         for b in self.parametric_cfg.bands:
             if not b.enabled:
                 new_sos.append(IDENTITY_SOS.copy())
             else:
-                new_sos.append(
-                    design_filter(b.filter_type, b.freq, self.sample_rate, b.q, b.gain_db, b.order)
-                )
-        if not preserve_zi or len(new_sos) != len(self._peq_sos) or any(
-            a.shape != b.shape for a, b in zip(new_sos, self._peq_sos)
-        ):
-            self._peq_zi = [[np.zeros((s.shape[0], 2)) for s in new_sos] for _ in range(2)]
+                sec = design_filter(b.filter_type, b.freq, self.sample_rate, b.q, b.gain_db, b.order)
+                new_sos.append(sec)
+                active_sos.append(sec)
+        stacked = np.vstack(active_sos) if active_sos else IDENTITY_SOS.copy()
+        if not preserve_zi or stacked.shape != self._peq_stacked_sos.shape:
+            self._peq_zi = [np.zeros((stacked.shape[0], 2)) for _ in range(2)]
         self._peq_sos = new_sos
+        self._peq_stacked_sos = stacked
 
     def get_active_bode_sos(self) -> dict[str, Any]:
         """Snapshot active filter SOS & topology for Bode plot rendering."""
@@ -457,26 +465,25 @@ class FilterDSPProcessor:
             return y
 
         if self.mode == "graphic_eq":
-            gains = self.graphic_cfg.gains_db
+            if self._geq_stacked_sos.shape == IDENTITY_SOS.shape and np.allclose(
+                self._geq_stacked_sos, IDENTITY_SOS
+            ):
+                return x.copy()
             for ch in range(2):
-                sig = x[:, ch]
-                for idx, sos in enumerate(self._geq_sos):
-                    if idx < len(gains) and abs(gains[idx]) >= 0.02:
-                        sig, self._geq_zi[ch][idx] = signal.sosfilt(
-                            sos, sig, zi=self._geq_zi[ch][idx]
-                        )
-                y[:, ch] = sig
+                y[:, ch], self._geq_zi[ch] = signal.sosfilt(
+                    self._geq_stacked_sos, x[:, ch], zi=self._geq_zi[ch]
+                )
             return y
 
         if self.mode == "parametric_eq":
+            if self._peq_stacked_sos.shape == IDENTITY_SOS.shape and np.allclose(
+                self._peq_stacked_sos, IDENTITY_SOS
+            ):
+                return x.copy()
             for ch in range(2):
-                sig = x[:, ch]
-                for idx, band in enumerate(self.parametric_cfg.bands):
-                    if band.enabled:
-                        sig, self._peq_zi[ch][idx] = signal.sosfilt(
-                            self._peq_sos[idx], sig, zi=self._peq_zi[ch][idx]
-                        )
-                y[:, ch] = sig
+                y[:, ch], self._peq_zi[ch] = signal.sosfilt(
+                    self._peq_stacked_sos, x[:, ch], zi=self._peq_zi[ch]
+                )
             return y
 
         return x.copy()
