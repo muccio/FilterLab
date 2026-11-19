@@ -1,0 +1,20 @@
+# Python & Environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+
+# Packaging & Builds
+build/
+dist/
+*.spec.bak
+
+# OS & IDEs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "filterlab"
+version = "1.0.0"
+description = "Interactive Digital Filter & EQ Didactic Lab for macOS and Windows"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Mario Salvucci", email = "mariosalvucci@gmail.com" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Education",
+]
+dependencies = [
+    "PySide6>=6.7.0",
+    "numpy>=1.26.0",
+    "scipy>=1.12.0",
+    "sounddevice>=0.4.7",
+    "soundfile>=0.12.1",
+    "Pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyinstaller>=6.6.0",
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+filterlab = "run:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

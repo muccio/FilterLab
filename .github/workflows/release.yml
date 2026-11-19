@@ -1,0 +1,146 @@
+name: Build & Release FilterLab (macOS & Windows)
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    name: Build macOS (${{ matrix.os }} - ${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+            python-arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+            python-arch: x64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12 (${{ matrix.arch }})
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.python-arch }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          pip install pyinstaller pytest
+
+      - name: Run Test Suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          pytest -v tests/
+
+      - name: Build macOS Standalone Bundle & DMG
+        run: |
+          bash packaging/build_macos.sh
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: FilterLab-macos-${{ matrix.arch }}
+          path: |
+            dist/FilterLab-*-macos-*.app.zip
+            dist/FilterLab-*-macos-*.dmg
+          retention-days: 14
+
+  build-windows:
+    name: Build Windows (x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12 (x64)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: 'x64'
+          cache: 'pip'
+
+      - name: Install Inno Setup
+        run: |
+          choco install innosetup --no-progress -y
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          pip install pyinstaller pytest
+
+      - name: Run Test Suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          pytest -v tests/
+
+      - name: Build Windows Standalone & Installer
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File packaging/build_windows.ps1
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: FilterLab-windows-x64
+          path: |
+            dist/FilterLab-*-windows-x64-portable.zip
+            dist/FilterLab-Setup-*-windows-x64.exe
+          retention-days: 14
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-macos, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v') && always() && (needs.build-windows.result == 'success' || needs.build-macos.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List Release Assets
+        run: ls -lh release-assets
+
+      - name: Create Release & Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "FilterLab ${{ github.ref_name }} — Digital Filter & EQ Didactic Lab"
+          body: |
+            ## 🎛️ FilterLab ${{ github.ref_name }}
+            **Laboratorio Didattico e DSP Real-Time sui Filtri Digitali per macOS e Windows**
+
+            Sviluppato all'interno della suite **Musica Applicata**, basato sul percorso didattico delle 18 slide su Filtri Digitali, Equalizzatori e Channel Strip del Mixer.
+
+            ### 📦 Download Installers & Binaries
+            - **macOS (Apple Silicon `arm64` / Intel `x86_64`):** `.dmg` (drag-and-drop in Applicazioni) e `.app.zip`
+            - **Windows (`x64`):** `FilterLab-Setup-1.0.0-windows-x64.exe` (Installer guidato) e `FilterLab-1.0.0-windows-x64-portable.zip` (Portable)
+
+            ### ✨ Funzionalità Principali
+            - **Percorso Didattico Interattivo (10 Moduli + Quiz da 10 Domande):** copre Blackbox e campioni $\Delta t$, LowPass, HighPass, BandPass, BandReject, Quality Factor $Q$ e Ringing, Ordini/Roll-off/Butterworth, Moog Ladder, Serie vs Parallelo, Banchi di filtri modulati, EQ Grafica ISO (10/20/30 bande), Shelving/Peak/Notch/EQ Parametrico, Mandate Aux Pre/Post-Fader, Fader/PFL/VU Meter e Routing Mono→Pan-Pot→Stereo.
+            - **Laboratorio Pratico DSP Real-Time:** 4 Workbench (*Singolo Filtro*, *Serie/Parallelo/Banco*, *EQ Grafica*, *EQ Parametrica*), grafico Bode interattivo con nodi trascinabili, spettro FFT Pre/Post in tempo reale, risposta all'impulso $h[n]$, oscilloscopio e vista campioni Blackbox.
+            - **3 Sorgenti Audio:** Generatore Interno multi-segnale (Rumore Bianco/Rosa, Treno di Impulsi, Saw/Square PolyBLEP, Sinusoide, Sweep Logaritmico, Accordo Synth), Caricamento File Audio (WAV, AIFF, FLAC, OGG, MP3, M4A su macOS) con seek waveform, e Microfono Live full-duplex.
+          files: |
+            release-assets/*
+          draft: false
+          prerelease: false
